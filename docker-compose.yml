@@ -1,0 +1,12 @@
+version: "3.9"
+
+services:
+  pintos:
+    image: pkuflyingpig/pintos:latest
+    platform: linux/amd64
+    container_name: pintos
+    command: bash
+    tty: true
+    stdin_open: true
+    volumes:
+      - .:/home/PKUOS/pintos

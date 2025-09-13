@@ -1,0 +1,10 @@
+{
+  "name": "Pintos Dev",
+  "image": "pkuflyingpig/pintos:latest",
+  "runArgs": ["--platform=linux/amd64", "--rm"],
+  "mounts": [
+    "source=${localWorkspaceFolder},target=/home/PKUOS/pintos,type=bind"
+  ],
+  "remoteUser": "root",
+  "workspaceFolder": "/home/PKUOS/pintos"
+}
