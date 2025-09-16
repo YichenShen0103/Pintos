@@ -38,6 +38,8 @@
 #include "filesys/fsutil.h"
 #endif
 
+#define MAX_BUFFER_SIZE 128
+
 /** Page directory with kernel mappings only. */
 uint32_t *init_page_dir;
 
@@ -133,7 +135,55 @@ pintos_init (void)
     /* Run actions specified on kernel command line. */
     run_actions (argv);
   } else {
-    // TODO: no command line passed to kernel. Run interactively 
+    /* no command line passed to kernel. Run interactively. */
+    printf("Launching kernel monitor...\n\n");
+    char buf[MAX_BUFFER_SIZE];
+    int i = 0;
+    char c;
+
+    while (1) {
+        i = 0;
+        printf("PKUOS> ");
+        while (i < MAX_BUFFER_SIZE) {
+            c = input_getc ();
+            if (c == '\n' || c == '\r') {
+                putchar('\n');
+                break;
+            }
+            else if (c == 0x08 || c == 0x7F) { // Backspace
+                if (i > 0) {
+                    i--;
+                    putchar('\b');
+                    putchar(' ');
+                    putchar('\b');
+                }
+                continue;
+            }
+            else if (c == 0x1B) {
+                input_getc();
+                input_getc();
+                continue;
+            }
+            else if (c < 32 || c > 126) {
+                continue;
+            }
+
+            putchar (c);
+            buf[i++] = c;
+        }
+        buf[i] = '\0';
+        if (!strcmp (buf, "exit")) {
+            printf("Bye!\n");
+            break;
+        }
+        else if (!strcmp (buf, "whoami")) {
+            printf("2023202128\n");
+        }
+        else {
+            printf("invalid command: %s.\n", buf);
+        }
+    }
+
   }
 
   /* Finish up. */

@@ -1,6 +1,7 @@
 #include "devices/timer.h"
 #include <debug.h>
 #include <inttypes.h>
+#include <list.h>
 #include <round.h>
 #include <stdio.h>
 #include "devices/pit.h"
@@ -89,11 +90,26 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks) 
 {
-  int64_t start = timer_ticks ();
+  /* old implement - busy waiting
+   *
+   * int64_t start = timer_ticks ();
+   *
+   * ASSERT (intr_get_level () == INTR_ON);
+   * while (timer_elapsed (start) < ticks) 
+   *    thread_yield ();
+   */
+    if (ticks <= 0) {
+        return;
+    }
 
-  ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+    int64_t start = timer_ticks ();
+
+    ASSERT (intr_get_level () == INTR_ON);
+    enum intr_level old_level = intr_disable ();
+    struct thread *current_thread = thread_current ();
+    current_thread->tick_to_wakeup = start + ticks;
+    thread_sleep ();
+    intr_set_level (old_level);
 }
 
 /** Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -172,6 +188,7 @@ timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
+  check_thread_wakeup (ticks);
 }
 
 /** Returns true if LOOPS iterations waits for more than one timer
