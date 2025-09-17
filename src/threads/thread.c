@@ -4,6 +4,7 @@
 #include <random.h>
 #include <stdio.h>
 #include <string.h>
+#include <real.h>
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
@@ -56,6 +57,7 @@ static long long user_ticks;    /**< # of timer ticks in user programs. */
 /** Scheduling. */
 #define TIME_SLICE 4            /**< # of timer ticks to give each thread. */
 static unsigned thread_ticks;   /**< # of timer ticks since last yield. */
+static int64_t load_avg = 0;
 
 /** If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -205,6 +207,11 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
+  /* If new thread has higher priority, yield the cpu */
+  if (thread_current ()->priority < priority) {
+    thread_yield ();
+  }
+
   return tid;
 }
 
@@ -339,7 +346,14 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  thread_current ()->priority = new_priority;
+  int old_priority = thread_current ()->priority;
+  thread_current ()->original_priority = new_priority;
+
+  if (list_empty (&thread_current ()->locks) || 
+      new_priority > thread_current ()->priority) {
+    thread_current()->priority = new_priority;
+    thread_yield();
+  }
 }
 
 /** Returns the current thread's priority. */
@@ -351,35 +365,35 @@ thread_get_priority (void)
 
 /** Sets the current thread's nice value to NICE. */
 void
-thread_set_nice (int nice UNUSED) 
+thread_set_nice (int nice) 
 {
-  /* Not yet implemented. */
+    thread_current ()->nice = nice;
+    modify_priority (thread_current(), NULL);
+    thread_yield ();
 }
 
 /** Returns the current thread's nice value. */
 int
 thread_get_nice (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return thread_current ()->nice;
 }
 
 /** Returns 100 times the system load average. */
 int
 thread_get_load_avg (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+    int temp = MULTIPLY_X_BY_N (load_avg, 100);
+    return CONVERT_X_TO_INTEGER_NEAREST (temp);
 }
 
 /** Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return CONVERT_X_TO_INTEGER_NEAREST (MULTIPLY_X_BY_N (thread_current ()->recent_cpu, 100));
 }
-
+
 /** Idle thread.  Executes when no other thread is ready to run.
 
    The idle thread is initially put on the ready list by
@@ -466,7 +480,9 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->original_priority = priority;
   t->magic = THREAD_MAGIC;
+  list_init (&t->locks);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
@@ -627,6 +643,52 @@ thread_sleep (void)
     bool ascending = true;
     list_insert_ordered (&sleeping_list, &current_thread->elem, compare_wakeup_time, &ascending);
     thread_block ();
+}
+
+/* Increment by 1 for each clock tick */
+void 
+increase_recent_cpu (void) {
+  if (thread_current () != idle_thread) {
+    thread_current ()->recent_cpu = ADD_X_AND_N (thread_current ()->recent_cpu, 1);
+  }
+}
+
+/* Modify Priority */
+void
+modify_priority (struct thread *t, void *aux UNUSED) {
+    if (t!=idle_thread) {
+        // t->priority = CONVERT_X_TO_INTEGER_NEAREST (CONVERT_N_TO_FIXED_POINT (PRI_MAX) - t->recent_cpu / 4 - CONVERT_N_TO_FIXED_POINT (2 * t->nice));
+        t->priority = CONVERT_X_TO_INTEGER_NEAREST (CONVERT_N_TO_FIXED_POINT (PRI_MAX) - DIVIDE_X_BY_N (t->recent_cpu, 4) - CONVERT_N_TO_FIXED_POINT (2 * t->nice));
+    }
+    if (t->priority < PRI_MIN) {
+        t->priority = PRI_MIN;
+    }
+    if (t->priority > PRI_MAX) {
+        t->priority = PRI_MAX;
+    }
+}
+
+/* Modify recent_cpu */
+void 
+modify_cpu (struct thread *t, void *aux UNUSED) {
+    if (t != idle_thread) {
+        int64_t fa = MULTIPLY_X_BY_N (load_avg, 2);
+        int64_t fb = MULTIPLY_X_BY_N (load_avg, 2) + CONVERT_N_TO_FIXED_POINT (1);
+        t->recent_cpu = MULTIPLY_X_BY_Y (DIVIDE_X_BY_Y (fa, fb), t->recent_cpu) + CONVERT_N_TO_FIXED_POINT (t->nice);
+    }
+}
+
+/* Modify load average */
+void 
+modify_load_avg (void) {
+    int ready_threads = list_size (&ready_list);
+    if (thread_current () != idle_thread) {
+        ready_threads++;
+    }
+    int64_t fa = MULTIPLY_X_BY_N (load_avg, 59);
+    int add1 = DIVIDE_X_BY_N (fa, 60);
+    int add2 = DIVIDE_X_BY_N (CONVERT_N_TO_FIXED_POINT (ready_threads), 60);
+    load_avg = ADD_X_AND_Y (add1, add2);
 }
 
 /** Returns a tid to use for a new thread. */

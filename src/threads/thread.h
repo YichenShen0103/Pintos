@@ -103,6 +103,21 @@ struct thread
 
     /* Owned by timer.c. */
     int64_t tick_to_wakeup;
+
+    /* Locks holded by this thread. */
+    struct list locks;
+
+    /* Locks this thread is waiting for. */
+    struct lock *waiting_lock;
+
+    /* Original priority of this thread (used in priority donation). */
+    int original_priority;
+
+    /* Nicess used in mlfqs */
+    int nice;
+
+    /* Used in mlfqs */
+    int64_t recent_cpu;
   };
 
 /** If false (default), use round-robin scheduler.
@@ -143,5 +158,12 @@ int thread_get_load_avg (void);
 
 void check_thread_wakeup (int64_t);
 void thread_sleep (void);
+
+void increase_recent_cpu (void);
+void modify_priority (struct thread *t, void *aux UNUSED);
+void modify_cpu (struct thread *t, void *aux UNUSED);
+void modify_load_avg (void);
+
+bool thread_compare_priority (const struct list_elem *, const struct list_elem *, void *);
 
 #endif /**< threads/thread.h */
