@@ -9,4 +9,7 @@
 /** Page directory with kernel mappings only. */
 extern uint32_t *init_page_dir;
 
+/** Disable early lock operation caused context switch in priority scheduling. */
+extern bool schedule_started;
+
 #endif /**< threads/init.h */

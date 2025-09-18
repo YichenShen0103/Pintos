@@ -43,6 +43,9 @@
 /** Page directory with kernel mappings only. */
 uint32_t *init_page_dir;
 
+/** Disable early lock operation caused context switch in priority scheduling */
+bool schedule_started = false;
+
 #ifdef FILESYS
 /** -f: Format the file system? */
 static bool format_filesys;

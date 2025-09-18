@@ -6,6 +6,7 @@
 #include <string.h>
 #include <real.h>
 #include "threads/flags.h"
+#include "threads/init.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
 #include "threads/palloc.h"
@@ -119,6 +120,9 @@ thread_start (void)
   /* Start preemptive thread scheduling. */
   intr_enable ();
 
+  /* Now scheduler and idle thread are ready. */
+  schedule_started = true;
+
   /* Wait for the idle thread to initialize idle_thread. */
   sema_down (&idle_started);
 }
@@ -224,6 +228,9 @@ thread_create (const char *name, int priority,
 void
 thread_block (void) 
 {
+  if (!schedule_started) {
+    return;
+  }
   ASSERT (!intr_context ());
   ASSERT (intr_get_level () == INTR_OFF);
 
@@ -312,6 +319,9 @@ thread_exit (void)
 void
 thread_yield (void) 
 {
+  if (!schedule_started) {
+    return;
+  }
   struct thread *cur = thread_current ();
   enum intr_level old_level;
   
@@ -351,8 +361,8 @@ thread_set_priority (int new_priority)
 
   if (list_empty (&thread_current ()->locks) || 
       new_priority > thread_current ()->priority) {
-    thread_current()->priority = new_priority;
-    thread_yield();
+    thread_current ()->priority = new_priority;
+    thread_yield ();
   }
 }
 
