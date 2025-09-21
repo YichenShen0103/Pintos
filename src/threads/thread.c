@@ -15,6 +15,7 @@
 #include "threads/vaddr.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "filesys/file.h"
 #endif
 
 /** Random value for struct thread's `magic' member.
@@ -39,7 +40,7 @@ static struct thread *idle_thread;
 /** Initial thread, the thread running init.c:main(). */
 static struct thread *initial_thread;
 
-/** Lock used by allocate_tid(). */
+/** Lock used in this file. */
 static struct lock tid_lock;
 
 /** Stack frame for kernel_thread(). */
@@ -96,6 +97,7 @@ thread_init (void)
   ASSERT (intr_get_level () == INTR_OFF);
 
   lock_init (&tid_lock);
+  lock_init (&file_lock);
   list_init (&ready_list);
   list_init (&all_list);
   list_init (&sleeping_list);
@@ -192,6 +194,12 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+  t->zombie = malloc (sizeof (struct zombie_thread));
+  t->zombie->tid = tid;
+  sema_init (&t->zombie->sema, 0);
+  list_push_back (&thread_current ()->children, &t->zombie->zombie_elem);
+  t->zombie->exit_code = UINT32_MAX;
+  t->zombie->living = true;
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -308,7 +316,28 @@ thread_exit (void)
      and schedule another process.  That process will destroy us
      when it calls thread_schedule_tail(). */
   intr_disable ();
-  list_remove (&thread_current()->allelem);
+
+  /* release all fd */
+#ifdef USERPROG
+  struct list_elem *e;
+  while (!list_empty (&thread_current ()->files))
+  {
+    e = list_front (&thread_current ()->files);
+    struct thread_file *tf = list_entry (e, struct thread_file, file_elem);
+    acquire_lock_f ();
+    file_close (tf->file);
+    release_lock_f ();
+    /*Remove the file in the list*/
+    list_remove (e);
+    /*Free the resource the file obtain*/
+    free (tf);
+  }
+#endif
+
+  thread_current ()->zombie->exit_code = thread_current ()->exit_code;
+  thread_current ()->zombie->living = false;
+  sema_up (&thread_current ()->zombie->sema);
+  list_remove (&thread_current ()->allelem);
   thread_current ()->status = THREAD_DYING;
   schedule ();
   NOT_REACHED ();
@@ -492,7 +521,18 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->original_priority = priority;
   t->magic = THREAD_MAGIC;
+  t->max_file_fd = 3;  // 0, 1, 2 reserved for stdin, stdout, stderr
   list_init (&t->locks);
+  list_init (&t->files);
+
+  if (t == initial_thread) 
+      t->parent = NULL;
+  else 
+      t->parent = thread_current ();
+  list_init (&t->children);
+  sema_init (&t->sema, 0);
+  t->success = true;
+  t->exit_code = UINT32_MAX;
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
@@ -714,7 +754,19 @@ allocate_tid (void)
 
   return tid;
 }
-
+
+void
+acquire_lock_f (void)
+{
+  lock_acquire (&file_lock);
+}
+
+void
+release_lock_f (void)
+{
+  lock_release (&file_lock);
+}
+
 /** Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);

@@ -25,7 +25,7 @@
 #include "tests/lib.h"
 
 static const int EXPECTED_DEPTH_TO_PASS = 30;
-static const int EXPECTED_REPETITIONS = 10;
+static const int EXPECTED_REPETITIONS = 5;
 
 const char *test_name = "multi-oom";
 

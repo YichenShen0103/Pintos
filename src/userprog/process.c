@@ -20,6 +20,7 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+static void push_argument (void **esp, int argc, int argv[]);
 
 /** Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -28,20 +29,37 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 tid_t
 process_execute (const char *file_name) 
 {
-  char *fn_copy;
+  char *fn_copy0, *fn_copy1;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
-  fn_copy = palloc_get_page (0);
-  if (fn_copy == NULL)
+  fn_copy0 = palloc_get_page (0);
+  if (fn_copy0 == NULL)
     return TID_ERROR;
-  strlcpy (fn_copy, file_name, PGSIZE);
+  strlcpy (fn_copy0, file_name, PGSIZE);
+
+  fn_copy1 = palloc_get_page (0);
+  if (fn_copy1 == NULL) {
+    palloc_free_page (fn_copy0);
+    return TID_ERROR;
+  }
+  strlcpy (fn_copy1, file_name, PGSIZE);
+
+  char *save_ptr;
+  char *cmd = strtok_r (fn_copy0, " ", &save_ptr);
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
-  if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+  tid = thread_create (cmd, PRI_DEFAULT, start_process, fn_copy1);
+  palloc_free_page (fn_copy0);
+  if (tid == TID_ERROR) {
+    palloc_free_page (fn_copy1); 
+  }
+
+  sema_down (&thread_current ()->sema);
+  if (!thread_current ()->success)
+      return TID_ERROR;
+
   return tid;
 }
 
@@ -54,6 +72,12 @@ start_process (void *file_name_)
   struct intr_frame if_;
   bool success;
 
+  char *fn_copy = malloc (strlen (file_name) + 1);
+  strlcpy (fn_copy, file_name, strlen (file_name) + 1);
+
+  char *token, *save_ptr;
+  file_name = strtok_r (file_name, " ", &save_ptr);
+
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
@@ -61,10 +85,37 @@ start_process (void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
 
+  /* Parsing arguments. */
+  if (success) 
+  {
+      int argc = 0;
+      int argv_point_to_address[128];
+      for (token = strtok_r (fn_copy, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr)) 
+      {
+          if_.esp -= strlen (token) + 1;
+          memcpy (if_.esp, token, strlen (token) + 1);
+          if (argc >= 128) {
+            success = false;
+            break;
+          }
+          argv_point_to_address[argc++] = if_.esp;
+      }
+      if_.esp = (int)if_.esp & 0xfffffffc;
+      push_argument (&if_.esp, argc, argv_point_to_address);
+      thread_current ()->parent->success = true;
+      sema_up (&thread_current ()->parent->sema);  
+  }
+
+
   /* If load failed, quit. */
   palloc_free_page (file_name);
-  if (!success) 
-    thread_exit ();
+  free (fn_copy);
+
+  if (!success) {
+      thread_current ()->parent->success = false;
+      sema_up (&thread_current ()->parent->sema);
+      thread_exit ();
+  }
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -86,9 +137,31 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
-  return -1;
+    struct thread *t = thread_current ();
+    struct zombie_thread *child_zombie;
+    struct list_elem *it;
+    for (it = list_begin (&t->children);
+         it != list_end (&t->children);
+         it = list_next (it))
+    {
+        child_zombie = list_entry (it, struct zombie_thread, 
+                                   zombie_elem);
+        if (child_zombie->tid == child_tid) {
+            break;
+        }
+    }
+    if (it == list_end (&t->children)) {
+        return -1;
+    }
+
+    if (child_zombie->living) {
+        sema_down (&child_zombie->sema);
+    }
+    ASSERT (child_zombie->living == false);
+    list_remove (it);
+    return child_zombie->exit_code;
 }
 
 /** Free the current process's resources. */
@@ -96,6 +169,18 @@ void
 process_exit (void)
 {
   struct thread *cur = thread_current ();
+
+  printf ("%s: exit(%d)\n", cur->name, cur->exit_code);
+
+  if (!list_empty (&cur->files)) 
+    {
+      struct thread_file *exec_file = 
+          list_entry (list_begin (&cur->files), 
+                      struct thread_file, 
+                      file_elem);
+      file_allow_write (exec_file->file);
+    }
+
   uint32_t *pd;
 
   /* Destroy the current process's page directory and switch back
@@ -222,12 +307,18 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
+  acquire_lock_f ();
   file = filesys_open (file_name);
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
       goto done; 
     }
+  file_deny_write (file);
+  struct thread_file *thread_file_temp = malloc (sizeof (struct thread_file));
+  thread_file_temp->fd   = t->max_file_fd++;
+  thread_file_temp->file = file;
+  list_push_back (&t->files, &thread_file_temp->file_elem);
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -312,10 +403,10 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  release_lock_f ();
   return success;
 }
-
+
 /** load() helpers. */
 
 static bool install_page (void *upage, void *kpage, bool writable);
@@ -462,4 +553,23 @@ install_page (void *upage, void *kpage, bool writable)
      address, then map our page there. */
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
+}
+
+static void
+push_argument (void **esp, int argc, int argv[]) 
+{
+  *esp = (int)*esp & 0xfffffffc;
+  *esp -= 4;
+  *(int *) *esp = 0;
+  for (int i = argc - 1; i >= 0; i--)
+  {
+    *esp -= 4;
+    *(int *) *esp = argv[i];
+  }
+  *esp -= 4;
+  *(int *) *esp = (int) *esp + 4;
+  *esp -= 4;
+  *(int *) *esp = argc;
+  *esp -= 4;
+  *(int *) *esp = 0;
 }

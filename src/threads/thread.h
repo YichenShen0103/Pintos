@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "threads/synch.h"
 
 /** States in a thread's life cycle. */
 enum thread_status
@@ -85,10 +86,18 @@ struct thread
     /* Owned by thread.c. */
     tid_t tid;                          /**< Thread identifier. */
     enum thread_status status;          /**< Thread state. */
+    int exit_code;                      /**< Thread exit code. */
     char name[16];                      /**< Name (for debugging purposes). */
     uint8_t *stack;                     /**< Saved stack pointer. */
     int priority;                       /**< Priority. */
     struct list_elem allelem;           /**< List element for all threads list. */
+
+    /* This section is used for communication between parents and children */
+    struct list children;               /**< Child threads of this thread. */
+    struct zombie_thread *zombie;       /**< Even after dead, parent can get the mininal information it need. */
+    struct thread *parent;              /**< Parent thread of this thread. */
+    struct semaphore sema;              /**< Used for parent waiting syscall. */
+    bool success;                       /**< Tell the parent if execution is successful. */
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /**< List element. */
@@ -118,12 +127,36 @@ struct thread
 
     /* Used in mlfqs */
     int64_t recent_cpu;
+
+    /* File descriptor opened */
+    struct list files;                  /* List of fd opened */
+    int max_file_fd;                    /* Store max fd */
+  };
+
+/* File that the thread open */
+struct thread_file
+  {
+    int fd;                             /* file descriptor id */
+    struct file* file;                  /* The file */
+    struct list_elem file_elem;         /* Files list elem */
+  };
+
+struct zombie_thread 
+  {
+    int tid;
+    struct list_elem zombie_elem;
+    struct semaphore sema;
+    bool living;
+    int exit_code;
   };
 
 /** If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 extern bool thread_mlfqs;
+
+/** Used in thread.c and process.c, avoid race condition in lab2. */
+struct lock file_lock;
 
 void thread_init (void);
 void thread_start (void);
@@ -165,5 +198,8 @@ void modify_cpu (struct thread *t, void *aux UNUSED);
 void modify_load_avg (void);
 
 bool thread_compare_priority (const struct list_elem *, const struct list_elem *, void *);
+
+void release_lock_f (void);
+void acquire_lock_f (void);
 
 #endif /**< threads/thread.h */
